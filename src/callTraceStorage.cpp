@@ -290,6 +290,20 @@ u32 CallTraceStorage::put(int num_frames, ASGCT_CallFrame* frames, u64 counter) 
     return capacity - (INITIAL_CAPACITY - 1) + slot;
 }
 
+CallTrace* CallTraceStorage::get(u32 call_trace_id) {
+    if (call_trace_id > capacity()) {
+        return &_overflow_trace;
+    }
+
+    call_trace_id += (INITIAL_CAPACITY - 1);
+    for (LongHashTable* table = _current_table; table != NULL; table = table->prev()) {
+        if (call_trace_id >= table->capacity()) {
+            return table->values()[call_trace_id - table->capacity()].acquireTrace();
+        }
+    }
+    return NULL;
+}
+
 void CallTraceStorage::add(u32 call_trace_id, u64 samples, u64 counter) {
     if (call_trace_id > capacity()) {  // this also covers call_trace_id == OVERFLOW_TRACE_ID
         return;

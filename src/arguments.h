@@ -24,6 +24,7 @@ const char* const EVENT_NATIVELOCK = "nativelock";
 const char* const EVENT_WALL       = "wall";
 const char* const EVENT_CTIMER     = "ctimer";
 const char* const EVENT_ITIMER     = "itimer";
+const char* const EVENT_SIGNAL     = "signal";
 
 #define SHORT_ENUM __attribute__((__packed__))
 
@@ -76,7 +77,8 @@ enum SHORT_ENUM Output {
     OUTPUT_FLAMEGRAPH,
     OUTPUT_TREE,
     OUTPUT_JFR,
-    OUTPUT_OTLP
+    OUTPUT_OTLP,
+    OUTPUT_JSONL
 };
 
 enum JfrOption {
@@ -298,6 +300,7 @@ class Arguments {
 
     bool hasOutputFile() const {
         return _file != NULL &&
+            _output != OUTPUT_JSONL &&
             (_action == ACTION_STOP || _action == ACTION_DUMP ? _output != OUTPUT_JFR : _action >= ACTION_STATUS);
     }
 

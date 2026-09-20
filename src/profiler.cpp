@@ -37,6 +37,7 @@
 #include "otlp.h"
 #include "rateLimit.h"
 #include "safeAccess.h"
+#include "signalEvent.h"
 #include "stackFrame.h"
 #include "stackWalker.h"
 #include "symbols.h"
@@ -67,6 +68,7 @@ static J9WallClock j9_wall_clock;
 static CTimer ctimer;
 static ITimer itimer;
 static Instrument instrument;
+static SignalEvent signal_event;
 
 static SpanEvent profiling_window;
 
@@ -493,6 +495,51 @@ u64 Profiler::recordSample(void* ucontext, u64 counter, EventType event_type, Ev
     return (u64)tid << 32 | call_trace_id;
 }
 
+static void writeJsonString(Writer& out, const char* value) {
+    out << '"';
+    const unsigned char* p = (const unsigned char*)value;
+    while (*p != 0) {
+        switch (*p) {
+            case '"': out << "\\\""; break;
+            case '\\': out << "\\\\"; break;
+            case '\b': out << "\\b"; break;
+            case '\f': out << "\\f"; break;
+            case '\n': out << "\\n"; break;
+            case '\r': out << "\\r"; break;
+            case '\t': out << "\\t"; break;
+            default:
+                if (*p < 0x20) {
+                    char escaped[7];
+                    snprintf(escaped, sizeof(escaped), "\\u%04x", *p);
+                    out << escaped;
+                } else {
+                    out.write((const char*)p, 1);
+                }
+        }
+        p++;
+    }
+    out << '"';
+}
+
+void Profiler::writeStreamEvent(Writer& out, u64 timestamp, u64 trace) {
+    int tid = trace >> 32;
+    CallTrace* call_trace = _call_trace_storage.get((u32)trace);
+    if (call_trace == NULL) return;
+
+    FrameName fn(_global_args, _global_args._style | STYLE_DOTTED, _epoch,
+                 _thread_names_lock, _thread_names);
+    out << "{\"timestamp\":" << timestamp << ",\"tid\":" << tid << ",\"frames\":[";
+    for (int i = 0; i < call_trace->num_frames; i++) {
+        ASGCT_CallFrame& frame = call_trace->frames[i];
+        if (i > 0) out << ',';
+        out << "{\"bci\":" << (long)frame.bci << ",\"methodId\":"
+            << (u64)(uintptr_t)frame.method_id << ",\"symbol\":";
+        writeJsonString(out, fn.name(frame));
+        out << '}';
+    }
+    out << "]}\n";
+}
+
 void Profiler::recordExternalSample(u64 counter, int tid, EventType event_type, Event* event, int num_frames, ASGCT_CallFrame* frames) {
     atomicInc(_total_samples);
 
@@ -789,6 +836,8 @@ Engine* Profiler::selectEngine(Arguments& args) {
         return &ctimer;
     } else if (strcmp(event_name, EVENT_ITIMER) == 0) {
         return &itimer;
+    } else if (strcmp(event_name, EVENT_SIGNAL) == 0) {
+        return &signal_event;
     } else if (strchr(event_name, '.') != NULL && strchr(event_name, ':') == NULL) {
         return &instrument;
     } else {
@@ -964,7 +1013,9 @@ Error Profiler::start(Arguments& args, bool reset) {
     _thread_filter.init(args._filter);
 
     _engine = selectEngine(args);
-    if (_engine == &wall_clock && args._wall >= 0) {
+    if (args._output == OUTPUT_JSONL && _engine != &signal_event) {
+        return Error("jsonl output requires the signal event");
+    } else if (_engine == &wall_clock && args._wall >= 0) {
         return Error("Cannot start wall clock with the selected event");
     } else if (_engine != &perf_events && args._target_cpu != -1) {
         return Error("target-cpu is only supported with perf_events");
@@ -1194,6 +1245,8 @@ Error Profiler::dump(Writer& out, Arguments& args) {
             break;
         case OUTPUT_OTLP:
             dumpOtlp(out, args);
+            break;
+        case OUTPUT_JSONL:
             break;
         default:
             return Error("No output format selected");
@@ -1624,6 +1677,7 @@ Error Profiler::runInternal(Arguments& args, Writer& out) {
             out << "  " << EVENT_NATIVELOCK << "\n";
             out << "  " << EVENT_WALL << "\n";
             out << "  " << EVENT_ITIMER << "\n";
+            out << "  " << EVENT_SIGNAL << "\n";
             if (CTimer::supported()) {
                 out << "  " << EVENT_CTIMER << "\n";
             }

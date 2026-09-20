@@ -65,3 +65,8 @@ async-profiler currently supports the following output formats:
   endpoint: specify `http://` or `https://` URL instead of the file name, e.g.
   `asprof --loop 60s -f http://localhost:4318 8983`.
   If the URL does not specify a path, the default `/v1development/profiles` is used.
+
+- `jsonl` - live newline-delimited JSON output for `signal` profiling. Each accepted external signal produces one
+  object with its timestamp, native thread ID, and resolved stack frames. The signal handler sends fixed-size records
+  through a non-blocking pipe; samples are discarded if the consumer cannot keep up. Use `--interval` to set a global
+  minimum interval between accepted signals and bound stack-walking overhead.

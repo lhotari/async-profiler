@@ -122,6 +122,9 @@ Error Arguments::parse(const char* args) {
             CASE("otlp")
                 _output = OUTPUT_OTLP;
 
+            CASE("jsonl")
+                _output = OUTPUT_JSONL;
+
             CASE("samples")
                 _counter = COUNTER_SAMPLES;
 
@@ -520,6 +523,8 @@ Output Arguments::detectOutputFormat(const char* file) {
             return OUTPUT_FLAMEGRAPH;
         } else if (strcmp(ext, ".jfr") == 0) {
             return OUTPUT_JFR;
+        } else if (strcmp(ext, ".jsonl") == 0) {
+            return OUTPUT_JSONL;
         } else if (strcmp(ext, ".collapsed") == 0 || strcmp(ext, ".folded") == 0) {
             return OUTPUT_COLLAPSED;
         }
