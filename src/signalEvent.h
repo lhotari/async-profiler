@@ -22,6 +22,7 @@ class SignalEvent : public Engine {
     static volatile u64 _handler_gate;
     static volatile u64 _failed_traces;
     static volatile u64 _dropped_samples;
+    static volatile u64 _writer_failures;
 
     static void signalHandler(int signo, siginfo_t* siginfo, void* ucontext);
     static bool enterSignalHandler();

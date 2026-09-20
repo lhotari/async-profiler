@@ -36,6 +36,7 @@ static const u64 SIGNAL_HANDLER_GATE_COUNT_MASK = SIGNAL_HANDLER_GATE_CLOSED - 1
 volatile u64 SignalEvent::_handler_gate = SIGNAL_HANDLER_GATE_CLOSED;
 volatile u64 SignalEvent::_failed_traces;
 volatile u64 SignalEvent::_dropped_samples;
+volatile u64 SignalEvent::_writer_failures;
 
 void SignalEvent::signalHandler(int signo, siginfo_t* siginfo, void* ucontext) {
     int saved_errno = errno;
@@ -109,15 +110,22 @@ void SignalEvent::writerLoop() {
     FileWriter out(_output);
     _output = -1;
 
+    if (!attached) {
+        __atomic_add_fetch(&_writer_failures, 1, __ATOMIC_RELAXED);
+        return;
+    }
+
     StreamSample sample;
     while (true) {
         ssize_t bytes = read(_pipe[0], &sample, sizeof(sample));
         if (bytes == sizeof(sample)) {
-            if (attached) {
-                Profiler::instance()->writeStreamEvent(
-                    out, sample.timestamp, sample.monotonic_timestamp_ns, sample.trace);
-                // JSONL is a live stream consumed while profiling is active.
-                out.flush();
+            Profiler::instance()->writeStreamEvent(
+                out, sample.timestamp, sample.monotonic_timestamp_ns, sample.trace);
+            // JSONL is a live stream consumed while profiling is active.
+            out.flush();
+            if (!out.good()) {
+                __atomic_add_fetch(&_writer_failures, 1, __ATOMIC_RELAXED);
+                break;
             }
         } else if (bytes == 0) {
             break;
@@ -129,9 +137,7 @@ void SignalEvent::writerLoop() {
         }
     }
 
-    if (attached) {
-        VM::detachThread();
-    }
+    VM::detachThread();
 }
 
 Error SignalEvent::startJsonlWriter(const char* file) {
@@ -201,6 +207,7 @@ Error SignalEvent::start(Arguments& args) {
     _last_sample = 0;
     _failed_traces = 0;
     _dropped_samples = 0;
+    _writer_failures = 0;
 
     if (args._output == OUTPUT_JSONL) {
         Error error = startJsonlWriter(args.file());
@@ -224,10 +231,14 @@ void SignalEvent::stop() {
     }
     u64 failed_traces = __atomic_load_n(&_failed_traces, __ATOMIC_RELAXED);
     u64 dropped_samples = __atomic_load_n(&_dropped_samples, __ATOMIC_RELAXED);
+    u64 writer_failures = __atomic_load_n(&_writer_failures, __ATOMIC_RELAXED);
     if (failed_traces != 0) {
         Log::warn("Signal event failed to obtain %llu stack traces", failed_traces);
     }
     if (dropped_samples != 0) {
         Log::warn("Signal event dropped %llu samples from the output stream", dropped_samples);
+    }
+    if (writer_failures != 0) {
+        Log::warn("Signal event stream writer failed %llu times", writer_failures);
     }
 }
