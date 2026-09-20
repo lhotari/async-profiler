@@ -12,6 +12,7 @@ import java.util.regex.Pattern;
 
 public class Arguments {
     public String title;
+    public String units;
     public String highlight;
     public String output;
     public String state;

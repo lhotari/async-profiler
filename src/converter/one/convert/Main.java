@@ -165,6 +165,7 @@ public class Main {
                 "\n" +
                 "Flame Graph options:\n" +
                 "     --title STRING     Flame Graph title\n" +
+                "     --units STRING     Counter units displayed by the Flame Graph\n" +
                 "     --minwidth X       Skip frames smaller than X%\n" +
                 "     --grain X          Coarsen Flame Graph to the given grain size\n" +
                 "     --skip N           Skip N bottom frames\n" +

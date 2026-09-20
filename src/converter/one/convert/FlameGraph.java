@@ -236,7 +236,7 @@ public class FlameGraph implements Comparator<Frame> {
         out.print(args.tree);
 
         tail = printTill(out, tail, "/*units:*/");
-        out.print(units != null ? units : getValueUnits());
+        out.print(args.units != null ? args.units : units != null ? units : getValueUnits());
 
         tail = printTill(out, tail, "/*maxdiff:*/-1");
         out.print(maxdiff);

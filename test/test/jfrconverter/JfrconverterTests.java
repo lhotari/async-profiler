@@ -119,6 +119,13 @@ public class JfrconverterTests {
         assert Arrays.equals(original, reconstructed);
     }
 
+    @Test(mainClass = Main.class,
+            args = "--units us test/test/jfrconverter/sample2.collapsed %units.html")
+    public void customUnits(TestProcess p) throws Exception {
+        Output out = p.waitForExit("%units");
+        assert out.containsExact("const units = 'us'");
+    }
+
     private static byte[] buildFlameGraph(String input) throws IOException {
         FlameGraph fg = FlameGraph.parse(input, new Arguments());
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
