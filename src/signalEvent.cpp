@@ -57,12 +57,17 @@ void SignalEvent::signalHandler(int signo, siginfo_t* siginfo, void* ucontext) {
     u64 trace = Profiler::instance()->recordSample(ucontext, 1, EXECUTION_SAMPLE, &execution_event);
     if (trace == 0) {
         __atomic_add_fetch(&_failed_traces, 1, __ATOMIC_RELAXED);
-    } else if (_pipe[1] >= 0) {
+    } else {
+        int output_fd = __atomic_load_n(&_pipe[1], __ATOMIC_ACQUIRE);
+        if (output_fd < 0) {
+            errno = saved_errno;
+            return;
+        }
         StreamSample sample = {OS::micros() / 1000, now, trace};
         // Writing a fixed-size record to a non-blocking pipe is async-signal-safe.
         // If the consumer falls behind, discard the sample instead of blocking the
         // sampled application thread in this signal handler.
-        ssize_t result = write(_pipe[1], &sample, sizeof(sample));
+        ssize_t result = write(output_fd, &sample, sizeof(sample));
         if (result != sizeof(sample)) {
             __atomic_add_fetch(&_dropped_samples, 1, __ATOMIC_RELAXED);
         }
@@ -141,8 +146,13 @@ Error SignalEvent::startJsonlWriter(const char* file) {
 }
 
 void SignalEvent::stopJsonlWriter() {
-    close(_pipe[1]);
-    _pipe[1] = -1;
+    // Prevent handlers entering from this point onward from observing the
+    // descriptor. A handler already past the atomic load may still receive
+    // EBADF, but cannot discover the descriptor through the shared field.
+    int output_fd = __atomic_exchange_n(&_pipe[1], -1, __ATOMIC_ACQ_REL);
+    if (output_fd >= 0) {
+        close(output_fd);
+    }
     pthread_join(_writer_thread, NULL);
     close(_pipe[0]);
     _pipe[0] = -1;
