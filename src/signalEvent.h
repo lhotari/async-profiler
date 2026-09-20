@@ -17,16 +17,19 @@ class SignalEvent : public Engine {
     static int _pipe[2];
     static int _output;
     static pthread_t _writer_thread;
-    static SigAction _previous_handler;
     static long _interval;
     static volatile u64 _last_sample;
+    static volatile u64 _handler_gate;
     static volatile u64 _failed_traces;
     static volatile u64 _dropped_samples;
 
     static void signalHandler(int signo, siginfo_t* siginfo, void* ucontext);
+    static bool enterSignalHandler();
+    static void leaveSignalHandler(int saved_errno);
     static void* writerThreadEntry(void* unused);
     static void writerLoop();
     static Error startJsonlWriter(const char* file);
+    static void closeSignalHandlerGate();
     static void stopJsonlWriter();
 
   public:

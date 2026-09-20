@@ -27,4 +27,23 @@ public class SignalTests {
         Assert.isGreaterOrEqual(out.total(), 2, "external signals should produce samples");
         Assert.isLessOrEqual(out.total(), 6, "the interval should limit accepted samples");
     }
+
+    @Test(mainClass = CpuBurner.class, os = Os.LINUX, runIsolated = true)
+    public void signalStreamCanRestartWhileSignalsRaceWithStop(TestProcess p) throws Exception {
+        for (int round = 0; round < 10; round++) {
+            p.profile("start -e signal -i 1ns -o jsonl -f %f.jsonl");
+
+            Process signals = new ProcessBuilder(
+                    "sh", "-c",
+                    "i=0; while [ $i -lt 200 ]; do kill -PROF " + p.pid()
+                            + " || exit; i=$((i + 1)); done")
+                    .start();
+            p.profile("stop");
+            Assert.isEqual(signals.waitFor(), 0, "signals racing with stop should not terminate the JVM");
+
+            Process lateSignal = new ProcessBuilder("kill", "-PROF", Long.toString(p.pid())).start();
+            Assert.isEqual(lateSignal.waitFor(), 0, "a late pending signal should be safely ignored");
+            p.profile("status");
+        }
+    }
 }

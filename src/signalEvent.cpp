@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <sched.h>
 #include <string.h>
 #include <unistd.h>
 #include "event.h"
@@ -27,16 +28,23 @@ int SignalEvent::_signal;
 int SignalEvent::_pipe[2] = {-1, -1};
 int SignalEvent::_output = -1;
 pthread_t SignalEvent::_writer_thread;
-SigAction SignalEvent::_previous_handler;
 long SignalEvent::_interval;
 volatile u64 SignalEvent::_last_sample;
+static const u64 SIGNAL_HANDLER_GATE_CLOSED = 1ULL << 63;
+static const u64 SIGNAL_HANDLER_GATE_COUNT_MASK = SIGNAL_HANDLER_GATE_CLOSED - 1;
+
+volatile u64 SignalEvent::_handler_gate = SIGNAL_HANDLER_GATE_CLOSED;
 volatile u64 SignalEvent::_failed_traces;
 volatile u64 SignalEvent::_dropped_samples;
 
 void SignalEvent::signalHandler(int signo, siginfo_t* siginfo, void* ucontext) {
     int saved_errno = errno;
-    if (!_enabled) {
+    if (!enterSignalHandler()) {
         errno = saved_errno;
+        return;
+    }
+    if (!_enabled) {
+        leaveSignalHandler(saved_errno);
         return;
     }
 
@@ -44,7 +52,7 @@ void SignalEvent::signalHandler(int signo, siginfo_t* siginfo, void* ucontext) {
     u64 last_sample = __atomic_load_n(&_last_sample, __ATOMIC_RELAXED);
     while (true) {
         if (now - last_sample < (u64)_interval) {
-            errno = saved_errno;
+            leaveSignalHandler(saved_errno);
             return;
         }
         if (__atomic_compare_exchange_n(&_last_sample, &last_sample, now, false,
@@ -60,7 +68,7 @@ void SignalEvent::signalHandler(int signo, siginfo_t* siginfo, void* ucontext) {
     } else {
         int output_fd = __atomic_load_n(&_pipe[1], __ATOMIC_ACQUIRE);
         if (output_fd < 0) {
-            errno = saved_errno;
+            leaveSignalHandler(saved_errno);
             return;
         }
         StreamSample sample = {OS::micros() / 1000, now, trace};
@@ -72,6 +80,22 @@ void SignalEvent::signalHandler(int signo, siginfo_t* siginfo, void* ucontext) {
             __atomic_add_fetch(&_dropped_samples, 1, __ATOMIC_RELAXED);
         }
     }
+    leaveSignalHandler(saved_errno);
+}
+
+bool SignalEvent::enterSignalHandler() {
+    u64 gate = __atomic_load_n(&_handler_gate, __ATOMIC_ACQUIRE);
+    while ((gate & SIGNAL_HANDLER_GATE_CLOSED) == 0) {
+        if (__atomic_compare_exchange_n(&_handler_gate, &gate, gate + 1, false,
+                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void SignalEvent::leaveSignalHandler(int saved_errno) {
+    __atomic_sub_fetch(&_handler_gate, 1, __ATOMIC_RELEASE);
     errno = saved_errno;
 }
 
@@ -145,10 +169,17 @@ Error SignalEvent::startJsonlWriter(const char* file) {
     return Error::OK;
 }
 
+void SignalEvent::closeSignalHandlerGate() {
+    // Atomically close admission before waiting. Once the admitted count
+    // reaches zero, no signal handler can still access the stream descriptor.
+    __atomic_fetch_or(&_handler_gate, SIGNAL_HANDLER_GATE_CLOSED, __ATOMIC_ACQ_REL);
+    while ((__atomic_load_n(&_handler_gate, __ATOMIC_ACQUIRE) &
+            SIGNAL_HANDLER_GATE_COUNT_MASK) != 0) {
+        sched_yield();
+    }
+}
+
 void SignalEvent::stopJsonlWriter() {
-    // Prevent handlers entering from this point onward from observing the
-    // descriptor. A handler already past the atomic load may still receive
-    // EBADF, but cannot discover the descriptor through the shared field.
     int output_fd = __atomic_exchange_n(&_pipe[1], -1, __ATOMIC_ACQ_REL);
     if (output_fd >= 0) {
         close(output_fd);
@@ -177,12 +208,17 @@ Error SignalEvent::start(Arguments& args) {
     }
 
     _signal = args._signal == 0 ? SIGPROF : args._signal & 0xff;
-    _previous_handler = OS::installSignalHandler(_signal, signalHandler);
+    // Keep this disabled handler installed after stop, like async-profiler's
+    // other sampling engines. A thread may retain a pending profiling signal;
+    // restoring the process's previous (possibly default) disposition could
+    // otherwise terminate the JVM when that thread later unmasks the signal.
+    OS::installSignalHandler(_signal, signalHandler);
+    __atomic_store_n(&_handler_gate, 0, __ATOMIC_RELEASE);
     return Error::OK;
 }
 
 void SignalEvent::stop() {
-    OS::installSignalHandler(_signal, _previous_handler);
+    closeSignalHandlerGate();
     if (_pipe[1] >= 0) {
         stopJsonlWriter();
     }
