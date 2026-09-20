@@ -20,6 +20,8 @@ class SignalEvent : public Engine {
     static SigAction _previous_handler;
     static long _interval;
     static volatile u64 _last_sample;
+    static volatile u64 _failed_traces;
+    static volatile u64 _dropped_samples;
 
     static void signalHandler(int signo, siginfo_t* siginfo, void* ucontext);
     static void* writerThreadEntry(void* unused);

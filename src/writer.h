@@ -54,6 +54,7 @@ class FileWriter : public Writer {
         return _fd >= 0;
     }
 
+    void flush();
     virtual void write(const char* data, size_t len);
 };
 

@@ -521,14 +521,22 @@ static void writeJsonString(Writer& out, const char* value) {
     out << '"';
 }
 
-void Profiler::writeStreamEvent(Writer& out, u64 timestamp, u64 trace) {
+void Profiler::writeStreamEvent(Writer& out, u64 timestamp, u64 monotonic_timestamp_ns, u64 trace) {
     int tid = trace >> 32;
     CallTrace* call_trace = _call_trace_storage.get((u32)trace);
     if (call_trace == NULL) return;
 
     FrameName fn(_global_args, _global_args._style | STYLE_DOTTED, _epoch,
                  _thread_names_lock, _thread_names);
-    out << "{\"timestamp\":" << timestamp << ",\"tid\":" << tid << ",\"frames\":[";
+    out << "{\"timestamp\":" << timestamp
+        << ",\"monotonicTimestampNs\":" << monotonic_timestamp_ns
+        << ",\"tid\":" << tid << ",\"threadName\":";
+    {
+        MutexLocker ml(_thread_names_lock);
+        ThreadMap::iterator it = _thread_names.find(tid);
+        writeJsonString(out, it == _thread_names.end() ? "" : it->second.c_str());
+    }
+    out << ",\"frames\":[";
     for (int i = 0; i < call_trace->num_frames; i++) {
         ASGCT_CallFrame& frame = call_trace->frames[i];
         if (i > 0) out << ',';
@@ -1009,8 +1017,14 @@ Error Profiler::start(Arguments& args, bool reset) {
         _features.comp_task = 0;
     }
 
-    _update_thread_names = args._threads || args._output == OUTPUT_JFR;
+    _update_thread_names = args._threads || args._output == OUTPUT_JFR || args._output == OUTPUT_JSONL;
     _thread_filter.init(args._filter);
+    if (args._output == OUTPUT_JSONL) {
+        // JSONL is consumed while the recording is running, so seed names for
+        // threads that existed before JVMTI thread-start notifications begin.
+        updateJavaThreadNames();
+        updateNativeThreadNames();
+    }
 
     _engine = selectEngine(args);
     if (args._output == OUTPUT_JSONL && _engine != &signal_event) {

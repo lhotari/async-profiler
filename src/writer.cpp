@@ -55,11 +55,16 @@ FileWriter::FileWriter(int fd) : _fd(fd), _size(0) {
 }
 
 FileWriter::~FileWriter() {
-    flush(_buf, _size);
+    flush();
     free(_buf);
     if (_fd > STDERR_FILENO) {
         close(_fd);
     }
+}
+
+void FileWriter::flush() {
+    flush(_buf, _size);
+    _size = 0;
 }
 
 void FileWriter::flush(const char* data, size_t len) {
